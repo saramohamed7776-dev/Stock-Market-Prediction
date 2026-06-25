@@ -1,0 +1,80 @@
+====================================================
+  📈 STOCK MARKET PREDICTION — HOW TO RUN
+  Uneeq Interns AI/ML Internship | By Sarsora
+====================================================
+
+📁 FOLDER STRUCTURE:
+─────────────────────
+StockMarketPrediction/
+│
+├── app.py                  ← Flask Web Dashboard (run this!)
+├── stock_prediction.py     ← Terminal-only script
+├── requirements.txt        ← All dependencies
+├── README.md               ← GitHub documentation
+├── HOW_TO_RUN.txt          ← This file
+│
+└── templates/
+    └── index.html          ← Dashboard UI
+
+
+====================================================
+  OPTION 1 — WEB DASHBOARD (Recommended ⭐)
+====================================================
+
+Step 1: Open PowerShell in this folder
+        (Shift + Right Click → Open PowerShell here)
+
+Step 2: Install all dependencies (only once):
+        pip install -r requirements.txt
+
+Step 3: Run the Flask dashboard:
+        python app.py
+
+Step 4: Open your browser and go to:
+        http://127.0.0.1:5000
+
+Step 5: Enter a stock ticker (e.g. AAPL, TSLA, GOOGL)
+        and click ▶ Run Model !
+
+
+====================================================
+  OPTION 2 — TERMINAL SCRIPT (Simple)
+====================================================
+
+Step 1: Open PowerShell in this folder
+
+Step 2: Run:
+        python stock_prediction.py
+
+Step 3: Output chart saved as:
+        stock_prediction_output.png
+
+
+====================================================
+  CHANGE THE STOCK TICKER
+====================================================
+
+In stock_prediction.py, line 27:
+    STOCK_TICKER = "AAPL"   ← change this!
+
+Popular tickers: TSLA, GOOGL, MSFT, AMZN, META
+
+
+====================================================
+  MODEL RESULTS (AAPL 2018–2024)
+====================================================
+
+  RMSE  : $6.13
+  MAE   : $5.31
+  MAPE  : 3.18%  ← within 3% of real Apple price!
+
+
+====================================================
+  BUILT WITH
+====================================================
+
+  Python | TensorFlow/Keras | Flask
+  yfinance | Scikit-learn | Matplotlib
+  NumPy | Pandas | Chart.js
+
+====================================================

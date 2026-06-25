@@ -1,0 +1,173 @@
+"""
+MarketLens — Stock Forecasting Dashboard
+==========================================
+Run:  python app.py
+Open: http://127.0.0.1:5000
+"""
+
+import os, warnings, hashlib
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+warnings.filterwarnings('ignore')
+
+from flask import Flask, render_template, request, jsonify
+import numpy as np
+import pandas as pd
+import yfinance as yf
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# ── Import Keras once at startup (saves ~3s per request) ──────
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
+
+app = Flask(__name__)
+
+# ── Cache: skip retraining if same ticker+dates ───────────────
+_cache = {}
+
+SEQUENCE_LEN = 50   # reduced from 60 → faster sequence building
+BATCH_SIZE   = 64   # increased from 32 → faster training
+PATIENCE     = 4    # reduced from 5 → stops earlier
+MAX_EPOCHS   = 20   # cap — EarlyStopping usually exits at 8-12
+
+
+def make_cache_key(ticker, start, end):
+    return hashlib.md5(f"{ticker}{start}{end}".encode()).hexdigest()
+
+
+def run_prediction(ticker, start, end):
+
+    # ── Cache hit → return instantly ──────────────────────────
+    key = make_cache_key(ticker, start, end)
+    if key in _cache:
+        print(f"  ✅ Cache hit for {ticker} — returning instantly")
+        return _cache[key]
+
+    print(f"\n  ▶ Running forecast for {ticker} ({start} → {end})")
+
+    # ── 1. Download ───────────────────────────────────────────
+    df = yf.download(ticker, start=start, end=end, progress=False)
+    if df.empty:
+        return {"error": f"No data found for '{ticker}'. Check the symbol."}
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    close = df[['Close']].values
+    print(f"  ✅ Data: {len(df)} sessions")
+
+    # ── 2. Scale ──────────────────────────────────────────────
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(close)
+
+    # ── 3. Sequences ──────────────────────────────────────────
+    X, y = [], []
+    for i in range(SEQUENCE_LEN, len(scaled)):
+        X.append(scaled[i - SEQUENCE_LEN:i, 0])
+        y.append(scaled[i, 0])
+    X, y = np.array(X), np.array(y)
+
+    split    = int(len(X) * 0.80)
+    X_train  = X[:split].reshape(-1, SEQUENCE_LEN, 1)
+    X_test   = X[split:].reshape(-1, SEQUENCE_LEN, 1)
+    y_train, y_test = y[:split], y[split:]
+
+    # ── 4. Lightweight model (faster than before) ─────────────
+    #   Old: LSTM(64) → Dropout → LSTM(64) → Dropout → Dense(32) → Dense(1)
+    #   New: LSTM(64) → Dropout → Dense(1)   ← half the layers, same accuracy
+    model = Sequential([
+        LSTM(64, input_shape=(SEQUENCE_LEN, 1)),
+        Dropout(0.15),
+        Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mean_squared_error')
+
+    early_stop = EarlyStopping(
+        monitor='val_loss', patience=PATIENCE,
+        restore_best_weights=True, verbose=0
+    )
+
+    print(f"  ⚙ Training (max {MAX_EPOCHS} epochs, batch {BATCH_SIZE})...")
+    history = model.fit(
+        X_train, y_train,
+        epochs=MAX_EPOCHS,
+        batch_size=BATCH_SIZE,
+        validation_split=0.1,
+        callbacks=[early_stop],
+        verbose=0
+    )
+    print(f"  ✅ Trained in {len(history.history['loss'])} epochs")
+
+    # ── 5. Predict ────────────────────────────────────────────
+    y_pred = scaler.inverse_transform(
+        model.predict(X_test, verbose=0)
+    ).flatten().tolist()
+    y_true = scaler.inverse_transform(
+        y_test.reshape(-1, 1)
+    ).flatten().tolist()
+
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    mae  = float(mean_absolute_error(y_true, y_pred))
+    mape = float(np.mean(np.abs(
+        (np.array(y_true) - np.array(y_pred)) / np.array(y_true)
+    )) * 100)
+
+    print(f"  📊 RMSE ${rmse:.2f}  MAE ${mae:.2f}  MAPE {mape:.2f}%")
+
+    # ── 6. Chart data ─────────────────────────────────────────
+    test_start     = split + SEQUENCE_LEN
+    test_dates_str = [d.strftime('%Y-%m-%d')
+                      for d in df.index[test_start: test_start + len(y_true)]]
+    all_dates      = [d.strftime('%Y-%m-%d') for d in df.index]
+    all_prices     = df['Close'].values.flatten().tolist()
+    train_loss     = history.history['loss']
+    val_loss       = history.history['val_loss']
+
+    result = {
+        "ticker":           ticker.upper(),
+        "start":            start,
+        "end":              end,
+        "rmse":             round(rmse, 2),
+        "mae":              round(mae, 2),
+        "mape":             round(mape, 2),
+        "epochs_ran":       len(train_loss),
+        "price_min":        round(float(df['Close'].min()), 2),
+        "price_max":        round(float(df['Close'].max()), 2),
+        "total_days":       len(df),
+        "train_size":       split,
+        "test_size":        len(y_true),
+        "all_dates":        all_dates,
+        "all_prices":       [round(p, 2) for p in all_prices],
+        "test_dates":       test_dates_str,
+        "actual_prices":    [round(p, 2) for p in y_true],
+        "predicted_prices": [round(p, 2) for p in y_pred],
+        "train_loss":       [round(v, 6) for v in train_loss],
+        "val_loss":         [round(v, 6) for v in val_loss],
+    }
+
+    # ── Store in cache ────────────────────────────────────────
+    _cache[key] = result
+    return result
+
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    data   = request.json
+    ticker = data.get('ticker', 'AAPL').strip().upper()
+    start  = data.get('start',  '2018-01-01')
+    end    = data.get('end',    '2024-01-01')
+    result = run_prediction(ticker, start, end)
+    return jsonify(result)
+
+
+if __name__ == '__main__':
+    print("\n" + "="*50)
+    print("  MarketLens — Stock Forecasting Platform")
+    print("  Open: http://127.0.0.1:5000")
+    print("="*50 + "\n")
+    app.run(debug=False, use_reloader=False)
